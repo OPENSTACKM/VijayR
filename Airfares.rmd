@@ -1,0 +1,214 @@
+---
+title: "Airfares"
+output:
+  html_document:
+    df_print: paged
+  html_notebook:
+    theme: spacelab
+  pdf_document: default
+data: '`r Sys.Date()'
+---
+
+
+```{r}
+pacman::p_load(data.table,tidyr,tidyverse,forecast, leaps,ggplot2,MASS )
+```
+
+
+```{r corellation and scatter plot}
+Airlines.df <- read.csv("Airfares.csv")
+Airlines1.df <- Airlines.df[,c(-1,-2,-3,-4)]
+
+#Considering numeric predictors
+Airlines1.num.df <- Airlines1.df[,c(-3,-4,-10,-11)]
+
+#Initializing
+correlation <-NULL
+
+#Finding corellation between FARE and rest of the predictors
+
+for (one in names(Airlines1.num.df)){
+  correlation[one] <- cor(Airlines1.num.df$FARE, Airlines1.num.df[one])
+}
+
+correlation_df <- data.frame(correlation)
+correlation_df
+
+#scatter plot for FARE and rest of the numeric predictors
+
+Airlines1.num.df %>%
+  gather(-FARE, key = "var", value = "value") %>%
+  ggplot(aes(x = value, y = FARE)) +
+    geom_point() +
+    facet_wrap(~ var, scales = "free") +
+    theme_bw()
+
+#From cor and scatter plot we obsere there is a good corellation between FARE and Distance
+```
+
+
+
+```{r avg fare and flight percentage per category}
+
+#Categorical variables
+cat_vars<-c('VACATION','SW','SLOT','GATE')
+cat_vars
+
+categorical_analysis <- function(category) {
+  print("Percentage of flights")
+  print(prop.table(table(Airlines1.df[category]))*100)
+  print("Average fare in each category")
+  form<-as.formula(paste("Airlines1.df$FARE ~ Airlines1.df$",category))
+  print(aggregate(form, data <- Airlines1.df, FUN <- mean))
+}
+
+for (var in cat_vars) {
+  cat(paste("Analysis for",var,"\n\n"))
+  categorical_analysis(var)
+  cat("\n")
+}
+
+#Based on the above categories values 
+#difference between the means is higher for SW Yes and No.
+
+#As we have 80% of data for GATE as FREE so there is max chance for the data to fall into one category compared to other categorical variables.
+#and SW has higher mean difference so it can also be a major categorical predictor. 
+```
+
+
+```{r dataPartition}
+
+smp_size <- round(0.80 * nrow(Airlines1.df))
+
+## set the seed to make your partition reproducible
+set.seed(42)  
+train_ind <- sample(seq_len(nrow(Airlines1.df)), size <- smp_size)
+
+train <- Airlines1.df[train_ind, ]
+test <- Airlines1.df[-train_ind, ]
+
+```
+
+
+
+
+```{r leap_stepwise}
+
+leap_stepwise <- regsubsets(FARE ~ ., data = train, nbest = 1, nvmax = dim(Airlines1.df)[2],
+                     method = "seqrep")
+leap_stepwise_sum <- summary(leap_stepwise)
+#Models
+leap_stepwise_sum$which
+#Adjusted R^2 value 
+leap_stepwise_sum$adjr2
+#Max Adjusted R^2 parametes
+which.max(leap_stepwise_sum$adjr2)
+#Min cp for number of attributes
+which.min(leap_stepwise_sum$cp)
+
+#From stepwise using leap package we observe that max AdjR^2 is for subset 12 predictors which has all the predictive variables except COUPON,S_INCOME .
+#As we are looking for min variables considering cp , has removed variables COUPON and remaining 11 variables are considered 
+```
+
+
+
+**SUBSET SELECTION **  
+**Exhaustive Search ** 
+
+ 
+```{r leap_exhaustive}
+leap_exhaustive <- regsubsets(FARE ~ ., data = train, nbest = 1, nvmax = dim(Airlines1.df)[2],
+                     method = "exhaustive")
+leap_exhaustive_sum <- summary(leap_exhaustive)
+#Models
+leap_exhaustive_sum$which
+#Adjusted R^2 value 
+leap_exhaustive_sum$adjr2
+#Max Adjusted R^2 parametes
+which.max(leap_exhaustive_sum$adjr2)
+#Min cp for number of attributes
+which.min(leap_exhaustive_sum$cp)
+
+#coeff 
+coef(leap_exhaustive,which.max(leap_exhaustive_sum$adjr2))
+
+
+
+#From exhaustive search using leap package we observe that max AdjR^2 is for subset 12 predictors which has all the predictive variables except COUPON which is same as the leap_stepwise.
+#As we are looking for min variables considering cp , has removed variables COUPON, NEW,S_INCOME  and remaining 10 variables are considered.  
+```
+
+
+```{r predictive accuracy}
+
+leap_stepwise.lm <- lm(FARE ~ .-COUPON -S_INCOME, data = train)
+leap_stepwise.predict <- predict(leap_stepwise.lm, test)
+accuracy(leap_stepwise.predict, test$FARE)
+
+leap_exhaustive.lm <- lm(FARE ~ .-COUPON -NEW -S_INCOME , data = train)
+leap_exhaustive.lm.predict <- predict(leap_exhaustive.lm, test)
+accuracy(leap_exhaustive.lm.predict, test$FARE)
+
+#We could see that stepwise search model has better accuracy lower RMSE with 11 predictors
+
+
+```
+
+```{r average fare}
+
+#COUPON = 1.202, NEW = 3, VACATION = No, SW =
+#No, HI = 4442.141, S_INCOME = $28,760, E_INCOME = $27,664, S_POP =
+#4,557,004, E_POP = 3,195,503, SLOT = Free, GATE = Free, PAX = 12,782,
+#DISTANCE = 1976 miles.
+
+coeff <- coef(leap_exhaustive.lm)
+
+value_without_sw <- coeff[1] + coeff[2]*0 + coeff[3]*0 + coeff[4]*4442.141 + coeff[5]*27664 + coeff[6]*4557004 + coeff[7]*3195503 + coeff[8]*1 + coeff[9]*1 +  coeff[10]*1976 + coeff[11]*12782
+
+value_without_sw
+
+value_with_sw <- coeff[1] + coeff[2]*0 + coeff[3]*1 + coeff[4]*4442.141 + coeff[5]*27664 + coeff[6]*4557004 + coeff[7]*3195503 + coeff[8]*1 + coeff[9]*1 + coeff[10]*1976 + coeff[11]*12782
+value_with_sw
+
+value_with_sw
+
+Fare.diff <- value_without_sw - value_with_sw
+Fare.diff
+
+#we can observe that there is a fare is  $40 less when SW is yes.
+```
+
+
+```{r leap_backward}
+
+leap_backward <- regsubsets(FARE ~ ., data = train, nbest = 1, nvmax = dim(Airlines1.df)[2],
+                     method = "backward")
+
+leap_backward_sum <- summary(leap_backward)
+#Models
+leap_backward_sum$which
+#Adjusted R^2 value 
+leap_backward_sum$adjr2
+#Max Adjusted R^2 parametes
+which.max(leap_backward_sum$adjr2)
+which.min(leap_backward_sum$cp)
+
+```
+
+```{r Regression}
+train.lm <- lm(FARE ~ ., data = train)
+#disabling scientific notaion, i.e not getting numbers like 810032e+09
+options(scipen = 999)
+summary(train.lm)
+```
+
+```{r stepAIC}
+train.lm.stepwise1 <- stepAIC(train.lm, direction = "backward")
+
+```
+# In the StepAIC model, we remove the variables based on their contribution to AIC. Hence in first iteration, Coupon had the least AIC and thus removed. In second Iteration, S_Income has the lowest AIC and thus removed. In the second iteration, you can see that <none> is included as it is from the COUPON variable contribution and thus included. In the third Iteration, NEW has least AIC and eliminated. Note that here we have the <none> contributing through S_Income. In the 4th iteration,<none> seems to be having the least AIC and hence iteration stopped. The Optimal model is hence created.
+
+
+
+
+
