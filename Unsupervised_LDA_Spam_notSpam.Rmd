@@ -1,0 +1,211 @@
+---
+title: "Spam/not Spam"
+author: "Vijay Varada"
+date: "29/10/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+Group 8 BUAN6356002
+
+## Load Packages
+```{r loadpackages, warning=FALSE, message=FALSE}
+pacman::p_load(caret, data.table, MASS, ggplot2, gains)
+```
+
+## Load Data
+```{r}
+options(digits = 3)
+options(scipen=999)
+# Load data
+spambase <- fread("spambase.data")
+# Load Column Names for the data.table
+cnames = read.table("spambase.names", comment.char="|", header=F)[1]
+cnames = gsub(":.*", "", as.matrix(cnames))
+cnames = c(cnames[c(2:nrow(cnames))],"spam")
+colnames(spambase) = cnames
+spambase$spam <- ifelse(spambase$spam==0,"Regular","Spam")
+spambase$spam <- as.factor(spambase$spam)
+
+```
+
+
+```{r Identifying top 10 predictors}
+ldaspam <- lda(spam~., data = spambase)
+
+ldameans<- ldaspam$means
+
+for (val in 1:57)
+{ 
+  ldameans[2,val] <- abs(ldameans[2,val]-ldameans[1,val])
+ }
+ldameansdiff <- ldameans[2,]
+#ldameansdiff
+names(ldameansdiff) <- cnames[1:57]
+
+predictors<- tail(sort(ldameansdiff),10)
+predictors
+
+pnames <- names(predictors)
+pnames
+```
+#Interpretation 1 - Above output indicates the top 10 predictors for which the difference between the spam-class and
+ non-spam class is the highest in the following order
+ 1. capital_run_length_total
+ 2. capital_run_length_longest
+ 3. capital_run_length_average
+ 4. word_freq_george
+ 5. word_freq_you
+ 6. word_freq_your
+ 7. word_freq_hp
+ 8. word_freq_free
+ 9. word_freq_hpl
+ 10.char_freq_!
+
+```{r Partition}
+pnames[11] <- "spam"
+spambase1 <-spambase[,pnames , with = FALSE]
+
+# Split the data into training and validation/test set
+set.seed(42)
+training.index <- createDataPartition(spambase1$spam, p = 0.8, list = FALSE)
+#training.index
+spam.train <- spambase1[training.index, ]
+spam.valid <- spambase1[-training.index, ]
+
+# Normalize the data
+
+# Estimate preprocessing parameters
+norm.values  <- preProcess(spam.train, method = c("center", "scale"))
+
+# Transform the training and testing data using the estimated parameters
+spam.train.norm <- predict(norm.values, spam.train)
+spam.valid.norm <- predict(norm.values, spam.valid)
+
+```
+
+
+```{r Performing LDA}
+# Performing LDA
+spam.lda <- lda(spam~.,  data = spam.train.norm)
+spam.lda
+```
+
+
+```{r Prior Probabilities}
+# Prior Probabilities
+spam.lda$prior
+```
+#Interpretation 3 - The Prior probabilities that we observe here are 0.606 for Regular Mail(Non-Spam) and 0.394 for 
+Spam mail
+
+
+```{r }
+# Linear Discriminants
+spam.lda$scaling
+```
+#Interpretation 4 -  Coefficients of linear discriminants are the LD1 values. They separate the classes between spam
+and non spam(regular) hence maximizing the difference between them. Here the LD1 represents the weights of each 
+variable representation among the total representation. We have only 1 Linear Discriminant variable as we have only 
+2 variables as class of interest
+
+
+```{r }
+pred.valid <- predict(spam.lda, spam.valid.norm)
+head(pred.valid$x,10)
+```
+#Interpretation 5 - The LDA is given by the $x column of the resultant model matrix. The LD1 values corresponds to 
+the amount of weights each of the entry suffices to, i.e. the weights of each resultant variable to that of the 
+respective row that identifies it as spam or nonspam. The posterior probabilities help us identify whether the 
+respective elements are classified as spam or non spam. Here the default cut-off value is 0.5 and hence by 
+respective calculations on how the LD1 values of respective rows amount to, the recors is classified to its 
+posterior probabilities and hence to its class. This respective LD1 values are obtained through mahanabolis distance,
+which is the distnance observed by the record with the centroids of the various elements. On Sorting the LD values
+and plotting a graph across LD1 vs LD1 as we have done in the below question, we see that as the value of LD1
+increases, the probabiliy that it gets classified as spam increases.
+
+
+
+#Interpretation 6 - There is only 1 linear discriminant in the model. We obtain the number of linear discriminants
+from the expression - (Number of classes to be predicted) - 1. As our class of interest is between SPAM and NON-SPAM
+we have 2 classes to be predicted and hence 1 ( 2 - 1 ) linear discriminant
+
+
+
+```{r }
+#LDA plot - Training Data
+
+pred.train <- predict(spam.lda, spam.train.norm)
+
+lda.plot.train <- cbind(spam.train.norm, pred.train$x)
+ggplot(lda.plot.train, aes(LD1, LD1)) +
+  geom_point(aes(color = spam))
+
+#LDA plot - Validation Data
+lda.plot.valid <- cbind(spam.valid.norm, predict(spam.lda, spam.valid.norm)$x)
+ggplot(lda.plot.valid, aes(LD1, LD1)) +
+  geom_point(aes(color = spam))
+
+plot(spam.lda)
+
+pred.train <- predict(spam.lda, spam.train.norm)
+
+```
+
+#Interpretation - 7 Here we plot the scatter plot across the linear discriminants and see that it is a straight 
+line with a positive slope. As the values across LD1 increases, we see that the posterier probability that the record
+to be classified as spam increases. This can be inferred through the difference in the colour by the graphs that we 
+have obtained. On plotting the lda graph we see that most of the group 0 (Regular) is concentrated on the lesser part
+and group 1 (Spam) are concentrated on the further part.
+
+
+```{r }
+pred.valid <- predict(spam.lda, spam.valid.norm)
+acc <- table(pred.valid$class, spam.valid.norm$spam) #Table for predicted vs actual
+confusionMatrix(acc)
+```
+#Interpretation 8 - Based on the confusion matrix we observe that the sensitivity value is 0.901, and specificity 
+value is 0.674
+
+
+```{r}
+# Lift Chart
+pb <- pred.valid$posterior
+pb <- as.data.frame(pb)
+
+pred.LDA <- data.frame(spam.valid.norm$spam, pb[,2])
+
+
+x <- as.data.frame(pred.valid$posterior)
+y <- data.frame(spam.valid.norm$spam, x[,2])
+colnames(y) <- c("x1","y1")
+
+lift.ld <- lift(x1 ~ y1, data = y, cuts=10, class="Spam")
+xyplot(lift.ld, main="LDA Lift Chart", type=c("l","g"), lwd=1,
+       scales=list(x=list(alternating=FALSE,tick.number = 10),
+                   y=list(alternating=FALSE,tick.number = 10)))
+
+
+# Decile chart
+prob <- ifelse(spam.valid.norm$spam == "Spam", 1 ,0)
+df_num <- data.frame(prob, pb$Spam)
+colnames(df_num) <- c("Act","Probabilities")
+#df_numeric
+gain <- gains(df_num$Act, df_num$Probabilities)
+barplot(gain$mean.resp / mean(df_num$Act), names.arg = gain$depth, xlab = "Percentile", space = 1.3,
+        ylab = "Mean Response", main = "Decile wise lift chart", col = "seagreen", border = NA)
+```
+#Interpretatiion 9 - We see from the lift chart that our model out performs the naive model. This can also be
+confirmed with the decile chart where we are achieving a higher mean response in the initial stages. This confirms
+we are able to predict values in the beginning of our model more accurately. Also in the decile chart, we are 
+observing values in the initial 20 percentile where we are classifying most of the records correctly.
+
+```{r }
+# Prediction vs Actual Confusion matrix
+acc <- table(ifelse(pred.valid$posterior[,2] > 0.2, 1, 0), ifelse(as.numeric(spam.valid.norm$spam) >1 , 1, 0))
+confusionMatrix(acc)
+```
+#Interpretation 10 - By changing the threshold to 0.2, the accuracy of the model obtained has reduced to 0.744. Also
+the sensitivity is reduced to 0.639 but the specificity is increased to 0.906. This could be attributed to the cutoff
+value that we have changed which doesn't account for the class where there is more number of records
